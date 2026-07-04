@@ -1,0 +1,84 @@
+# MERGE-NET — Failure Analysis
+
+Every real problem hit during the build: symptom, root cause, fix, and the transferable lesson. This is the most valuable document in the repo — configs show *what*; this shows *why*.
+
+---
+
+## 1. Tunnel endpoints split across isolated providers
+
+**Symptom:** `show crypto isakmp sa` stuck at `MM_NO_STATE / ACTIVE`; IPsec SAs empty (`spi 0x0`), `#send errors` incrementing; pings from the LAN time out forever.
+
+**Root cause:** EDGE-ABR sourced the tunnel from its ISP1 address but peered with R4's **ISP2** address. The two providers are isolated islands with no interconnect and no routes beyond their own /30s — IKE packets entered ISP1 and died; replies (had any existed) would have entered ISP2 and died symmetrically.
+
+**Fix:** peer both ends across the **same** transit (ISP1: `100.64.1.2 <-> 100.64.2.2`), move R4's crypto map to its ISP1-facing interface, and pin `/32` host routes to each peer via that transit.
+
+**Lesson:** both tunnel endpoints must share one transit path end-to-end. Tunnel redundancy means one tunnel per path — never mixed addressing across paths. The real internet's full-mesh reachability hides this mistake; a correctly ignorant lab exposes it in seconds. `MM_NO_STATE` = "I am sending IKE and hearing silence" — a transport problem, not a crypto-parameter problem.
+
+---
+
+## 2. IP SLA circular dependency
+
+**Symptom:** SLA probe showed 0 successes / hundreds of failures from the moment it was created; track object Down; router permanently failed over to the backup ISP despite the primary being healthy.
+
+**Root cause:** the probe target (ISP1's loopback) was reachable only via the default route — the same default route the probe's track object controls. Track down -> route withdrawn -> probe has no path -> probe can never succeed -> track can never come back up. The monitor depended on the thing it was monitoring.
+
+**Fix:** one untracked static host route to the probe target (`ip route 100.64.100.1 /32 -> ISP1 next-hop`), giving the probe a path that exists independently of anything it controls.
+
+**Lesson:** monitoring infrastructure must never depend on the object it governs. The probe still tests real path health — if the path beyond the first hop dies, the loopback is unreachable regardless of the host route. Only the bootstrap was fixed.
+
+---
+
+## 3. Crypto ACLs written bidirectionally
+
+**Symptom:** `show crypto ipsec sa` displayed two identity pairs per router — each edge claiming the *remote* site's translated range as local traffic.
+
+**Root cause:** both directions were placed in a single `VPN-INTERESTING` ACL on each side. A crypto ACL is not a filter — it defines outbound proxy identities, and the two peers must hold exact mirror images. Doubling the directions corrupts Phase 2 identity negotiation.
+
+**Fix:** one direction per side. EDGE-ABR: `172.16.10.0 -> 172.16.20.0`. R4: the exact reverse. The SA handles return traffic; no second line exists.
+
+**Lesson:** crypto ACLs answer one question only — "which traffic *leaving me* should be encrypted?" Mirror-image symmetry between peers is a protocol requirement, not a style preference.
+
+---
+
+## 4. Return traffic egressing the wrong interface
+
+**Symptom:** one-way traffic. Encaps counters moved on one side; decaps stayed zero on the other. Pings timed out even after IKE issues were fixed.
+
+**Root cause:** R4's steady-state default route points at ISP2 (its primary internet exit), but the crypto map lives on the ISP1 interface. Replies toward the remote translated range followed the default out the ISP2 interface — an interface with no crypto map — and left unencrypted into a provider with no route to `172.16.x.x`.
+
+**Fix:** explicit route for the remote translated prefix toward the tunnel's transit (`ip route 172.16.10.0/24 -> ISP1 next-hop`), mirrored on both edges.
+
+**Lesson:** a crypto map only inspects traffic that egresses the interface it is applied to. Encryption policy does not steer packets — routing must deliberately deliver tunnel-bound traffic to the crypto-mapped interface. Whenever general-traffic routing and tunnel transit diverge (as in any split-primary design), pinned routes for tunnel prefixes are mandatory, not optional.
+
+---
+
+## 5. Testing the tunnel from the router itself
+
+**Symptom:** pings from the edge router's own CLI to the remote site produced nothing — no IKE trigger, no SA, empty `show crypto isakmp sa`.
+
+**Root cause:** router-originated traffic does not traverse the inside->outside NAT path, so its source is never translated, so it never matches a crypto ACL written in post-NAT terms. The crypto map is lazy by design — it negotiates only when matching traffic arrives, and matching traffic can only be produced by a LAN host.
+
+**Fix / method:** all tunnel testing originates from VPCS hosts, targeting the remote **translated** range (`ping 172.16.20.10` from PC1).
+
+**Lesson:** "ping from the router" does not test NAT or VPN policy. Test from where the users are.
+
+---
+
+## 6. Overlap breaks host behavior before routing is even consulted
+
+**Symptom (by design):** a host pinging the remote site's *real* address gets silence — the packet never reaches any router.
+
+**Root cause:** the destination falls inside the host's own subnet mask, so the host ARPs locally instead of sending to its gateway. The failure occurs on the host, pre-routing; no edge configuration can intervene.
+
+**Lesson:** this is *why* overlapping subnets are a hard problem and why the translated ranges are the only viable communication path. In production the translated addresses hide behind DNS so users never type them.
+
+---
+
+## 7. Platform quirks worth knowing (EtherSwitch NM-16ESW)
+
+- `switchport` commands exist **only** on module ports (Fa1/x). Slot-0 ports (Fa0/x) are router interfaces — `% Invalid input` on them is a platform boundary, not a typo.
+- VLANs are created in `vlan database` EXEC mode and do **not** appear in `show running-config` — anyone restoring the config from a file must run those steps manually (commented in `SW-A.txt`).
+- Verification is `show vlan-switch`, not `show vlan`.
+- No port-security, unreliable STP tooling, and (on this image) no crypto/SSH. Features the platform cannot do were cut from scope rather than fought.
+
+**Lesson:** know the difference between "I misconfigured it" and "the platform cannot do it" — the second one is discovered fastest by testing one command and moving on.
