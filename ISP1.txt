@@ -1,0 +1,31 @@
+! ============================================================
+! ISP1  -  Transit provider #1 (PRIMARY path for Site A / VPN transit)
+! Deliberately minimal: NO routing protocol, NO route to private
+! space, NO hardening - simulates infrastructure outside the
+! administrative boundary. Its ignorance is the lab's proof of work:
+! if sites can talk, only the tunnel + NAT can be carrying them.
+!
+! Fa1/0 = 100.64.1.1/30 -> EDGE-ABR
+! Fa0/0 = 100.64.2.1/30 -> R4
+! Lo0   = 100.64.100.1/32  (IP SLA probe target for EDGE-ABR)
+! ============================================================
+!
+hostname ISP1
+!
+interface Loopback0
+ description SLA probe target (simulates a host deeper in the path)
+ ip address 100.64.100.1 255.255.255.255
+!
+interface FastEthernet1/0
+ description To EDGE-ABR
+ ip address 100.64.1.1 255.255.255.252
+ duplex auto
+ speed auto
+ no shutdown
+!
+interface FastEthernet0/0
+ description To R4
+ ip address 100.64.2.1 255.255.255.252
+ no shutdown
+!
+end

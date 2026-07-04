@@ -1,0 +1,112 @@
+! ============================================================
+! R4  -  Site B edge router (mirror of EDGE-ABR, primary FLIPPED)
+! Roles: OSPF neighbor to R5 | NAT-before-crypto | IPsec endpoint
+!        Dual-ISP with IP SLA tracked failover (primary = ISP2)
+!
+! Fa0/0 = 10.1.0.2/30   -> R5             (nat inside)
+! Fa1/0 = 100.64.4.2/30 -> ISP2 (PRIMARY) (nat outside)
+! Fa1/1 = 100.64.2.2/30 -> ISP1 (BACKUP)  (nat outside, crypto map)
+!
+! NAT:    Site B real 192.168.10.0/24 -> translated 172.16.20.0/24
+! Tunnel: 100.64.2.2 <-> 100.64.1.2 (EDGE-ABR) via ISP1 only
+! NOTE: general internet exits via ISP2 (primary), but the VPN
+!       rides ISP1 - hence crypto map on Fa1/1 + pinned routes.
+! ============================================================
+!
+hostname R4
+!
+enable secret Cisco12345!
+service password-encryption
+username admin privilege 15 secret Adm1nP@ss
+ip domain name lab.local
+!
+! ---------- IKE PHASE 1 ----------
+crypto isakmp policy 10
+ encryption aes 256
+ hash sha256
+ authentication pre-share
+ group 14
+ lifetime 3600
+crypto isakmp key VpnSiteKey123! address 100.64.1.2
+!
+! ---------- IPSEC PHASE 2 ----------
+crypto ipsec transform-set VPN-SET esp-aes 256 esp-sha256-hmac
+!
+! Crypto ACL: exact mirror of EDGE-ABR. ONE direction only.
+ip access-list extended VPN-INTERESTING
+ permit ip 172.16.20.0 0.0.0.255 172.16.10.0 0.0.0.255
+!
+crypto map SITE-VPN 10 ipsec-isakmp
+ set peer 100.64.1.2
+ set transform-set VPN-SET
+ match address VPN-INTERESTING
+!
+! ---------- INTERFACES ----------
+interface FastEthernet0/0
+ description P2P to R5
+ ip address 10.1.0.2 255.255.255.252
+ ip nat inside
+ duplex auto
+ speed auto
+ no shutdown
+!
+interface FastEthernet1/0
+ description WAN to ISP2 (PRIMARY internet exit)
+ ip address 100.64.4.2 255.255.255.252
+ ip nat outside
+ duplex auto
+ speed auto
+ no shutdown
+!
+interface FastEthernet1/1
+ description WAN to ISP1 (BACKUP internet / VPN transit)
+ ip address 100.64.2.2 255.255.255.252
+ ip nat outside
+ crypto map SITE-VPN
+ duplex auto
+ speed auto
+ no shutdown
+!
+! ---------- OSPF ----------
+router ospf 1
+ router-id 4.4.4.4
+ network 10.1.0.0 0.0.0.3 area 0
+ default-information originate
+!
+! ---------- NAT (overlap resolution) ----------
+ip nat inside source static network 192.168.10.0 172.16.20.0 /24
+!
+! ---------- IP SLA path monitoring (primary = ISP2) ----------
+ip sla 1
+ icmp-echo 100.64.100.2 source-interface FastEthernet1/0
+ frequency 5
+ip sla schedule 1 life forever start-time now
+track 1 ip sla 1 reachability
+!
+! ---------- ROUTING ----------
+! Tracked primary default (ISP2) + floating backup (ISP1):
+ip route 0.0.0.0 0.0.0.0 100.64.4.1 track 1
+ip route 0.0.0.0 0.0.0.0 100.64.2.1 10
+! Untracked host route to SLA target (breaks circular dependency):
+ip route 100.64.100.2 255.255.255.255 100.64.4.1
+! Pin tunnel peer + remote translated prefix to ISP1 (VPN transit)
+! so return traffic egresses the crypto-mapped interface:
+ip route 100.64.1.2 255.255.255.255 100.64.2.1
+ip route 172.16.10.0 255.255.255.0 100.64.2.1
+!
+! ---------- MANAGEMENT ----------
+ip access-list standard MGMT-SSH
+ permit 192.168.20.0 0.0.0.255
+!
+! Generate SSH keys manually (interactive): crypto key generate rsa modulus 2048
+ip ssh version 2
+!
+line vty 0 4
+ access-class MGMT-SSH in
+ login local
+ transport input ssh
+!
+end
+!
+! Verify: show track 1 | show crypto isakmp sa (QM_IDLE)
+!         show crypto ipsec sa (decaps incrementing = return path OK)

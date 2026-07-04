@@ -1,0 +1,30 @@
+! ============================================================
+! ISP2  -  Transit provider #2 (PRIMARY path for Site B)
+! Same deliberate minimalism as ISP1. No interconnect between
+! ISPs - each provider is an isolated island, so a provider
+! failure genuinely severs that path.
+!
+! Fa1/0 = 100.64.3.1/30 -> EDGE-ABR
+! Fa0/0 = 100.64.4.1/30 -> R4
+! Lo0   = 100.64.100.2/32  (IP SLA probe target for R4)
+! ============================================================
+!
+hostname ISP2
+!
+interface Loopback0
+ description SLA probe target (simulates a host deeper in the path)
+ ip address 100.64.100.2 255.255.255.255
+!
+interface FastEthernet1/0
+ description To EDGE-ABR
+ ip address 100.64.3.1 255.255.255.252
+ duplex auto
+ speed auto
+ no shutdown
+!
+interface FastEthernet0/0
+ description To R4
+ ip address 100.64.4.1 255.255.255.252
+ no shutdown
+!
+end

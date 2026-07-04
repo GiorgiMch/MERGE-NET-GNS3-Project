@@ -1,0 +1,119 @@
+! ============================================================
+! EDGE-ABR  -  Site A edge router
+! Roles: OSPF core neighbor | NAT-before-crypto | IPsec endpoint
+!        Dual-ISP with IP SLA tracked failover (primary = ISP1)
+!
+! Fa1/0 = 10.0.1.2/30   -> RDNR1          (nat inside)
+! Fa0/0 = 10.0.2.2/30   -> RDNR2          (nat inside)
+! Fa1/1 = 100.64.1.2/30 -> ISP1 (PRIMARY) (nat outside, crypto map)
+! Fa2/0 = 100.64.3.2/30 -> ISP2 (BACKUP)  (nat outside)
+!
+! NAT:    Site A real 192.168.10.0/24 -> translated 172.16.10.0/24
+! Tunnel: 100.64.1.2 <-> 100.64.2.2 (R4 ISP1 side) via ISP1 only
+! ============================================================
+!
+hostname EDGE-ABR
+!
+enable secret Cisco12345!
+service password-encryption
+username admin privilege 15 secret Adm1nP@ss
+ip domain name lab.local
+!
+! ---------- IKE PHASE 1 ----------
+crypto isakmp policy 10
+ encryption aes 256
+ hash sha256
+ authentication pre-share
+ group 14
+ lifetime 3600
+crypto isakmp key VpnSiteKey123! address 100.64.2.2
+!
+! ---------- IPSEC PHASE 2 ----------
+crypto ipsec transform-set VPN-SET esp-aes 256 esp-sha256-hmac
+!
+! Crypto ACL: POST-NAT (translated) addresses only, ONE direction.
+! R4 holds the exact mirror image. Never put both directions here.
+ip access-list extended VPN-INTERESTING
+ permit ip 172.16.10.0 0.0.0.255 172.16.20.0 0.0.0.255
+!
+crypto map SITE-VPN 10 ipsec-isakmp
+ set peer 100.64.2.2
+ set transform-set VPN-SET
+ match address VPN-INTERESTING
+!
+! ---------- INTERFACES ----------
+interface FastEthernet1/0
+ description P2P to RDNR1
+ ip address 10.0.1.2 255.255.255.252
+ ip nat inside
+ duplex auto
+ speed auto
+ no shutdown
+!
+interface FastEthernet0/0
+ description P2P to RDNR2
+ ip address 10.0.2.2 255.255.255.252
+ ip nat inside
+ no shutdown
+!
+interface FastEthernet1/1
+ description WAN to ISP1 (PRIMARY) - tunnel lives here
+ ip address 100.64.1.2 255.255.255.252
+ ip nat outside
+ crypto map SITE-VPN
+ duplex auto
+ speed auto
+ no shutdown
+!
+interface FastEthernet2/0
+ description WAN to ISP2 (BACKUP)
+ ip address 100.64.3.2 255.255.255.252
+ ip nat outside
+ duplex auto
+ speed auto
+ no shutdown
+!
+! ---------- OSPF ----------
+router ospf 1
+ router-id 3.3.3.3
+ network 10.0.1.0 0.0.0.3 area 0
+ network 10.0.2.0 0.0.0.3 area 0
+ default-information originate
+!
+! ---------- NAT (overlap resolution) ----------
+ip nat inside source static network 192.168.10.0 172.16.10.0 /24
+!
+! ---------- IP SLA path monitoring (primary = ISP1) ----------
+ip sla 1
+ icmp-echo 100.64.100.1 source-interface FastEthernet1/1
+ frequency 5
+ip sla schedule 1 life forever start-time now
+track 1 ip sla 1 reachability
+!
+! ---------- ROUTING ----------
+! Tracked primary default + floating backup:
+ip route 0.0.0.0 0.0.0.0 100.64.1.1 track 1
+ip route 0.0.0.0 0.0.0.0 100.64.3.1 10
+! Untracked host route to SLA target (breaks circular dependency):
+ip route 100.64.100.1 255.255.255.255 100.64.1.1
+! Pin tunnel peer + remote translated prefix to ISP1 so a default
+! failover can never silently reroute/kill the tunnel:
+ip route 100.64.2.2 255.255.255.255 100.64.1.1
+ip route 172.16.20.0 255.255.255.0 100.64.1.1
+!
+! ---------- MANAGEMENT ----------
+ip access-list standard MGMT-SSH
+ permit 192.168.20.0 0.0.0.255
+!
+! Generate SSH keys manually (interactive): crypto key generate rsa modulus 2048
+ip ssh version 2
+!
+line vty 0 4
+ access-class MGMT-SSH in
+ login local
+ transport input ssh
+!
+end
+!
+! Verify: show track 1 | show crypto isakmp sa (QM_IDLE)
+!         show crypto ipsec sa | show ip nat translations

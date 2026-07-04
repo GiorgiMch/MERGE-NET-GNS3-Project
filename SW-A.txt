@@ -1,0 +1,66 @@
+! ============================================================
+! SW-A  -  Site A access layer (c3745 + NM-16ESW EtherSwitch)
+! VLAN 10 = USERS (PC1) | VLAN 20 = MGMT (PC3)
+! Trunks: Fa1/14 -> RDNR1, Fa1/15 -> RDNR2
+! NOTE: This IOS image has NO crypto support -> SSH unavailable,
+!       management is telnet-only (documented limitation).
+! NOTE: Lab credentials are intentional and documented repo-wide.
+! ============================================================
+!
+! --- STEP 1: VLANs are created in "vlan database" EXEC mode on
+! --- this platform. These lines do NOT appear in running-config
+! --- and must be typed manually (not pasted into config mode):
+!
+!   vlan database
+!   vlan 10 name USERS
+!   vlan 20 name MGMT
+!   exit
+!
+! --- STEP 2: paste everything below in config mode ---
+!
+hostname SW-A
+!
+enable secret Cisco12345!
+service password-encryption
+username admin privilege 15 secret Adm1nP@ss
+ip domain name lab.local
+!
+interface FastEthernet0/0
+ description *** Unused router port - keep shut ***
+ no ip address
+ shutdown
+!
+interface FastEthernet0/1
+ description *** Unused router port - keep shut ***
+ no ip address
+ shutdown
+!
+interface FastEthernet1/0
+ description PC1 access port (VLAN 10 - USERS)
+ switchport mode access
+ switchport access vlan 10
+ no shutdown
+!
+interface FastEthernet1/1
+ description PC3 access port (VLAN 20 - MGMT)
+ switchport mode access
+ switchport access vlan 20
+ no shutdown
+!
+interface FastEthernet1/14
+ description Uplink to RDNR1 (802.1Q trunk)
+ switchport mode trunk
+ no shutdown
+!
+interface FastEthernet1/15
+ description Uplink to RDNR2 (802.1Q trunk)
+ switchport mode trunk
+ no shutdown
+!
+line vty 0 4
+ login local
+ transport input telnet
+!
+end
+!
+! Verify: show vlan-switch | show interfaces trunk

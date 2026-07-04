@@ -1,0 +1,64 @@
+! ============================================================
+! RDNR1  -  Site A gateway #1 (router-on-a-stick + HSRP)
+! HSRP ACTIVE for VLAN 10 (pri 110) | STANDBY for VLAN 20
+! Fa1/0   = dot1q trunk to SW-A Fa1/14
+! Fa0/0   = 10.0.1.1/30 -> EDGE-ABR Fa1/0
+! OSPF area 0, RID 1.1.1.1
+! ============================================================
+!
+hostname RDNR1
+!
+enable secret Cisco12345!
+service password-encryption
+username admin privilege 15 secret Adm1nP@ss
+ip domain name lab.local
+!
+interface FastEthernet1/0
+ description Trunk to SW-A
+ no ip address
+ no shutdown
+!
+interface FastEthernet1/0.10
+ description VLAN 10 USERS gateway (HSRP active)
+ encapsulation dot1Q 10
+ ip address 192.168.10.2 255.255.255.0
+ standby 10 ip 192.168.10.1
+ standby 10 priority 110
+ standby 10 preempt
+!
+interface FastEthernet1/0.20
+ description VLAN 20 MGMT gateway (HSRP standby)
+ encapsulation dot1Q 20
+ ip address 192.168.20.2 255.255.255.0
+ standby 20 ip 192.168.20.1
+ standby 20 preempt
+!
+interface FastEthernet0/0
+ description P2P link to EDGE-ABR
+ ip address 10.0.1.1 255.255.255.252
+ duplex auto
+ speed auto
+ no shutdown
+!
+router ospf 1
+ router-id 1.1.1.1
+ passive-interface FastEthernet1/0.10
+ passive-interface FastEthernet1/0.20
+ network 192.168.10.0 0.0.0.255 area 0
+ network 192.168.20.0 0.0.0.255 area 0
+ network 10.0.1.0 0.0.0.3 area 0
+!
+ip access-list standard MGMT-SSH
+ permit 192.168.20.0 0.0.0.255
+!
+! Generate SSH keys manually (interactive): crypto key generate rsa modulus 2048
+ip ssh version 2
+!
+line vty 0 4
+ access-class MGMT-SSH in
+ login local
+ transport input ssh
+!
+end
+!
+! Verify: show standby brief | show ip ospf neighbor

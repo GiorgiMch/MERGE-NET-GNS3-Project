@@ -1,0 +1,47 @@
+! ============================================================
+! R5  -  Site B core / LAN gateway
+! Fa1/0 = 10.1.0.1/30      -> R4
+! Fa0/0 = 192.168.10.1/24  -> PC2 LAN
+!         *** DELIBERATELY overlaps with Site A (merger scenario) ***
+! OSPF area 0, RID 5.5.5.5 - learns default from R4 (O*E2)
+! ============================================================
+!
+hostname R5
+!
+enable secret Cisco12345!
+service password-encryption
+username admin privilege 15 secret Adm1nP@ss
+ip domain name lab.local
+!
+interface FastEthernet1/0
+ description P2P to R4
+ ip address 10.1.0.1 255.255.255.252
+ duplex auto
+ speed auto
+ no shutdown
+!
+interface FastEthernet0/0
+ description Site B LAN (overlaps Site A by design)
+ ip address 192.168.10.1 255.255.255.0
+ no shutdown
+!
+router ospf 1
+ router-id 5.5.5.5
+ passive-interface FastEthernet0/0
+ network 10.1.0.0 0.0.0.3 area 0
+ network 192.168.10.0 0.0.0.255 area 0
+!
+ip access-list standard MGMT-SSH
+ permit 192.168.20.0 0.0.0.255
+!
+! Generate SSH keys manually (interactive): crypto key generate rsa modulus 2048
+ip ssh version 2
+!
+line vty 0 4
+ access-class MGMT-SSH in
+ login local
+ transport input ssh
+!
+end
+!
+! Verify: show ip ospf neighbor (4.4.4.4 FULL) | show ip route ospf (O*E2 default)
