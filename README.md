@@ -10,7 +10,8 @@ Built entirely in **GNS3 with Dynamips** (c7200 / c3745 images) — no VM, no hy
 
 ## Topology
 
-![Topology](images/topology.png)
+<img width="1296" height="707" alt="GNS3 VPN Project Topology" src="https://github.com/user-attachments/assets/0b51bd85-3f3d-47fc-8f2c-cb391118a101" />
+
 
 ```
 Site A (HQ)                      "Internet"                Site B (Branch)
