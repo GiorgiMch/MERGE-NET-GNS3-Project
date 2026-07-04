@@ -165,7 +165,6 @@ Failover tested live: shutting ISP1's far-side interface (a failure that never t
 
 ```
 configs/     final running-configs per device
-images/      topology + verification screenshots
 docs/        design notes and failure analysis
 ```
 
